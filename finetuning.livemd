@@ -1,0 +1,540 @@
+<!-- livebook:{"persist_outputs":true} -->
+
+# Is it a bird? Fine tuning models with Elixir
+
+```elixir
+Mix.install([
+  {:bumblebee, github: "elixir-nx/bumblebee", override: true},
+  {:exla, "~> 0.9.2"},
+  {:kino_bumblebee, "~> 0.5.1"},
+  {:explorer, "~> 0.10.1"},
+  {:image, "~> 0.55.2"}
+])
+```
+
+## Loading the model
+
+Set EXLA as a backend.
+
+```elixir
+Nx.global_default_backend(EXLA.Backend)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{EXLA.Backend, []}
+```
+
+Load model spec.
+
+```elixir
+model_name = "microsoft/resnet-18"
+
+{:ok, spec} = Bumblebee.load_spec({:hf, model_name},
+    architecture: :for_image_classification)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok,
+ %Bumblebee.Vision.ResNet{
+   architecture: :for_image_classification,
+   num_channels: 3,
+   embedding_size: 64,
+   hidden_sizes: [64, 128, 256, 512],
+   depths: [2, 2, 2, 2],
+   residual_block_type: :basic,
+   activation: :relu,
+   downsample_in_first_stage: false,
+   num_labels: 1000,
+   id_to_label: %{
+     719 => "piggy bank, penny bank",
+     813 => "spatula",
+     267 => "standard poodle",
+     166 => "Walker hound, Walker foxhound",
+     485 => "CD player",
+     39 => "common iguana, iguana, Iguana iguana",
+     627 => "limousine, limo",
+     310 => "ant, emmet, pismire",
+     413 => "assault rifle, assault gun",
+     130 => "flamingo",
+     445 => "bikini, two-piece",
+     394 => "sturgeon",
+     271 => "red wolf, maned wolf, Canis rufus, Canis niger",
+     222 => "kuvasz",
+     789 => "shoji",
+     860 => "tobacco shop, tobacconist shop, tobacconist",
+     725 => "pitcher, ewer",
+     545 => "electric fan, blower",
+     754 => "radio, wireless",
+     74 => "garden spider, Aranea diademata",
+     370 => "guenon, guenon monkey",
+     135 => "limpkin, Aramus pictus",
+     253 => "basenji",
+     790 => "shopping basket",
+     533 => "dishrag, dishcloth",
+     968 => "cup",
+     491 => "chain saw, chainsaw",
+     785 => "seat belt, seatbelt",
+     475 => "car mirror",
+     784 => "screwdriver",
+     336 => "marmot",
+     862 => "torch",
+     461 => "breastplate, aegis, egis",
+     855 => "thimble",
+     232 => "Border collie",
+     363 => "armadillo",
+     962 => "meat loaf, meatloaf",
+     218 => "Welsh springer spaniel",
+     ...
+   }
+ }}
+```
+
+Take a look at the labels in the previous cell. In order to only classify Bird or Not Bird we need to update model spec to only have two labels.
+
+```elixir
+spec = Bumblebee.configure(spec, num_labels: 2, id_to_label: %{0 => "Bird", 1 => "Not Bird"})
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%Bumblebee.Vision.ResNet{
+  architecture: :for_image_classification,
+  num_channels: 3,
+  embedding_size: 64,
+  hidden_sizes: [64, 128, 256, 512],
+  depths: [2, 2, 2, 2],
+  residual_block_type: :basic,
+  activation: :relu,
+  downsample_in_first_stage: false,
+  num_labels: 2,
+  id_to_label: %{0 => "Bird", 1 => "Not Bird"}
+}
+```
+
+Load model and featurizer.
+
+```elixir
+{:ok, bumblebee_model} = Bumblebee.load_model({:hf, model_name}, spec: spec)
+{:ok, featurizer} = Bumblebee.load_featurizer({:hf, model_name})
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+
+19:59:17.061 [debug] the following PyTorch parameters were unused:
+
+  * resnet.embedder.embedder.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.0.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.0.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.1.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.1.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.0.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.0.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.0.shortcut.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.1.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.1.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.0.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.0.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.0.shortcut.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.1.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.1.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.0.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.0.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.0.shortcut.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.1.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.1.layer.1.normalization.num_batches_tracked
+
+
+19:59:17.061 [debug] the following parameters were ignored, because of non-matching shape:
+
+  * image_classification_head.output.kernel (expected {512, 2}, got: {512, 1000})
+  * image_classification_head.output.bias (expected {2}, got: {1000})
+
+
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok,
+ %Bumblebee.Vision.ConvNextFeaturizer{
+   resize: true,
+   size: 224,
+   resize_method: :bicubic,
+   crop_percentage: 0.875,
+   normalize: true,
+   image_mean: [0.485, 0.456, 0.406],
+   image_std: [0.229, 0.224, 0.225]
+ }}
+```
+
+## Loading the data
+
+To prepare the [dataset](https://huggingface.co/datasets/saragag/Bird-or-not) clone the dataset and update the paths.
+
+We don't need to resize or reshape images as they are already 224 by 224 pixels in the dataset.
+
+```elixir
+defmodule Dataset do
+  def load(root_path, featurizer, opts \\ []) do
+    root_path
+    |> File.ls!()
+    |> Enum.flat_map(fn label_folder ->
+      folder_path = Path.join(root_path, label_folder)
+      if File.dir?(folder_path) do
+        load_folder(folder_path, featurizer, opts)
+      else
+        []
+      end
+    end)
+  end
+  
+  def load_folder(path, featurizer, opts \\ []) do
+    file_paths = File.ls!(path)
+    label = Path.basename(path)
+
+    file_paths = Enum.filter(file_paths, fn file ->
+      String.ends_with?(String.downcase(file), [".jpg", ".jpeg", ".png", ".gif", ".bmp"])
+    end)
+
+    files = Enum.map(file_paths, fn file -> 
+      path
+      |> Path.join(file)
+      |> Image.open!()
+      |> Image.to_nx!()
+      |> Nx.new_axis(0)
+      end)
+
+    files
+    |> Stream.zip(encode_labels(label))
+    |> featurize_and_batch(featurizer, opts[:batch_size])
+  end
+
+  defp featurize_and_batch(stream, featurizer, batch_size) do
+    stream
+    |> Stream.chunk_every(batch_size, batch_size, :discard)
+    |> Stream.map(fn batch ->
+      {image, label} = Enum.unzip(batch)
+      featurized = Bumblebee.apply_featurizer(featurizer, image)
+      {featurized, Nx.stack(label)}
+    end)
+  end
+
+  defp encode_labels(label) do
+    Stream.cycle([label])
+    |> Stream.map(fn l -> 
+      case l do
+        "Bird" -> 0
+        "Not Bird" -> 1
+      end
+    end)
+  end
+end
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:module, Dataset, <<70, 79, 82, 49, 0, 0, 18, ...>>, {:encode_labels, 1}}
+```
+
+Here we are setting batch size to 16 so that training and tesing batches have the same size. For this we are discarding 11 images from the tesing dataset.
+
+We also encode directory names.
+
+Change the paths below to point to dataset on your machine
+
+```elixir
+batch_size = 16
+
+testing_data = Dataset.load("/my/system/Bird-or-not/test", 
+  featurizer, 
+  batch_size: batch_size)
+
+training_data = Dataset.load("/my/system/Bird-or-not/train", 
+  featurizer, 
+  batch_size: batch_size)
+
+:ok
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+Check one image from training dataset
+
+```elixir
+Enum.take(training_data, 1)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  {%{
+     "pixel_values" => #Nx.Tensor<
+       f32[16][height: 224][width: 224][bands: 3]
+       EXLA.Backend<host:0, 0.985056768.3757178892.188059>
+       [
+         [
+           [
+             [0.005565485917031765, 0.6778712272644043, -0.4623701870441437],
+             [0.005565485917031765, 0.6778712272644043, -0.46543651819229126],
+             [0.005565485917031765, 0.6778712272644043, -0.43731996417045593],
+             [0.005565485917031765, 0.6778377294540405, -0.4255768954753876],
+             [0.005565485917031765, 0.6780742406845093, -0.42774003744125366],
+             [0.005565485917031765, 0.6789911985397339, -0.4286532998085022],
+             [0.005565485917031765, 0.6758356094360352, -0.42551159858703613],
+             [0.005502758082002401, 0.6598700881004333, -0.40961703658103943],
+             [0.004624825902283192, 0.6603312492370605, -0.41007599234580994],
+             [0.03502371534705162, 0.6603642106056213, -0.4101088345050812],
+             [0.04096465930342674, 0.6616571545600891, -0.4126832187175751],
+             [0.03984752669930458, 0.6502471566200256, -0.38996484875679016],
+             [0.03866922855377197, 0.6416454315185547, -0.37283778190612793],
+             [0.044099628925323486, 0.6428572535514832, -0.3752504587173462],
+             [0.058028895407915115, 0.6431071162223816, -0.3757483661174774],
+             [0.0569414347410202, 0.6422116756439209, ...],
+             ...
+           ],
+           ...
+         ],
+         ...
+       ]
+     >
+   },
+   #Nx.Tensor<
+     s32[16]
+     EXLA.Backend<host:0, 0.985056768.3757178903.191804>
+     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   >}
+]
+```
+
+## Training the model
+
+```elixir
+%{model: model, params: params} = bumblebee_model
+model
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+#Axon<
+  inputs: %{"pixel_values" => {nil, 224, 224, 3}}
+  outputs: "container_9"
+  nodes: 95
+>
+```
+
+We can check the shape of the output.
+
+```elixir
+[{inputs, _}] = Enum.take(training_data, 1)
+
+Axon.get_output_shape(model, inputs)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{
+  hidden_states: #Axon.None<...>,
+  logits: #Nx.Tensor<
+    f32[16][2]
+    Nx.TemplateBackend
+  >
+}
+```
+
+```elixir
+logits_model = Axon.nx(model, & &1.logits)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+#Axon<
+  inputs: %{"pixel_values" => {nil, 224, 224, 3}}
+  outputs: "nx_0"
+  nodes: 96
+>
+```
+
+Create training loop.
+
+```elixir
+loss =
+  &Axon.Losses.categorical_cross_entropy(&1, &2,
+    reduction: :mean,
+    from_logits: true,
+    sparse: true
+  )
+optimizer = Polaris.Optimizers.adam(learning_rate: 5.0e-5)
+accuracy = &Axon.Metrics.accuracy(&1, &2, from_logits: true, sparse: true)
+
+:ok
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+```elixir
+trained_model_state =
+  logits_model
+  |> Axon.Loop.trainer(loss, optimizer, log: 1)
+  |> Axon.Loop.metric(accuracy, "accuracy")
+  |> Axon.Loop.checkpoint(event: :epoch_completed)
+  |> Axon.Loop.run(training_data, params, epochs: 3, compiler: EXLA, strict?: false)
+
+:ok
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+
+19:59:53.561 [debug] Forwarding options: [compiler: EXLA] to JIT compiler
+Epoch: 0, Batch: 41, accuracy: 0.5000001 loss: 1.4580742
+Epoch: 1, Batch: 41, accuracy: 0.6071429 loss: 1.0624111
+Epoch: 2, Batch: 41, accuracy: 0.8645833 loss: 0.8352038
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+Create evaluation loop.
+
+```elixir
+logits_model
+|> Axon.Loop.evaluator()
+|> Axon.Loop.metric(accuracy, "accuracy")
+|> Axon.Loop.run(testing_data, trained_model_state, compiler: EXLA)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+
+20:03:15.184 [debug] Forwarding options: [compiler: EXLA] to JIT compiler
+Batch: 5, accuracy: 0.5520833
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{
+  0 => %{
+    "accuracy" => #Nx.Tensor<
+      f32
+      EXLA.Backend<host:0, 0.985056768.3757178894.239134>
+      0.5520833134651184
+    >
+  }
+}
+```
+
+Now we can use fine tuned model in serving to classifly images. For this we need to update bumblebee model with updated state after fine tuning and create a serving.
+
+```elixir
+bumblebee_model = %{bumblebee_model | model: model, params: trained_model_state}
+serving = Bumblebee.Vision.image_classification(bumblebee_model, featurizer)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%Nx.Serving{
+  module: Nx.Serving.Default,
+  arg: #Function<1.99249810/1 in Bumblebee.Vision.ImageClassification.image_classification/3>,
+  client_preprocessing: #Function<2.99249810/1 in Bumblebee.Vision.ImageClassification.image_classification/3>,
+  client_postprocessing: #Function<3.99249810/2 in Bumblebee.Vision.ImageClassification.image_classification/3>,
+  streaming: nil,
+  batch_size: nil,
+  distributed_postprocessing: &Function.identity/1,
+  process_options: [],
+  defn_options: []
+}
+```
+
+Using Kino we can load image for testing.
+
+```elixir
+image_input = Kino.Input.image("Select image", size: {224, 224})
+```
+
+And build a tensor from the image.
+
+```elixir
+image = Kino.Input.read(image_input)
+image =
+  image.file_ref
+  |> Kino.Input.file_path()
+  |> File.read!()
+  |> Nx.from_binary(:u8)
+  |> Nx.reshape({image.height, image.width, 3})
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+#Nx.Tensor<
+  u8[224][224][3]
+  EXLA.Backend<host:0, 0.985056768.3757178894.239136>
+  [
+    [
+      [226, 240, 255],
+      [209, 235, 255],
+      [158, 208, 233],
+      [97, 173, 199],
+      [63, 167, 194],
+      [60, 183, 214],
+      [58, 187, 226],
+      [45, 176, 220],
+      [57, 182, 230],
+      [59, 175, 226],
+      [60, 168, 217],
+      [60, 165, 210],
+      [59, 167, 205],
+      [58, 171, 201],
+      [55, 174, 196],
+      [53, 175, 198],
+      [50, 168, ...],
+      ...
+    ],
+    ...
+  ]
+>
+```
+
+Finally run the serving. We can reload different images and rerun the cells to test them.
+
+```elixir
+Nx.Serving.run(serving, image)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{
+  predictions: [
+    %{label: "Not Bird", score: 0.8171418905258179},
+    %{label: "Bird", score: 0.18285806477069855}
+  ]
+}
+```
